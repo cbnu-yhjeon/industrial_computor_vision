@@ -1,11 +1,10 @@
 """
 단안 카메라 기반 전방 위험 객체 탐지 및 위험도 등급화
-KITTI Dataset 사용
 
 실행:
-    python3 main.py --data ../dataset/training/image_2
-    python3 main.py --data ../dataset/training/image_2 --debug
-    python3 main.py --data ../dataset/training/image_2 --save
+    python3 main.py
+    python3 main.py --data ../dataset --debug
+    python3 main.py --data ../dataset --save
 """
 import cv2
 import numpy as np
@@ -24,8 +23,8 @@ from visualize      import draw_results, make_debug_panel
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data",  default="../dataset/training/image_2",
-                        help="KITTI image_2 디렉토리 경로")
+    parser.add_argument("--data",  default="../dataset",
+                        help="이미지 디렉토리 경로")
     parser.add_argument("--debug", action="store_true",
                         help="전처리 단계 디버그 패널 표시")
     parser.add_argument("--save",  action="store_true",
@@ -86,37 +85,51 @@ def main():
         return
 
     print(f"총 {len(img_paths)}장 처리 시작")
-    print("조작: SPACE=다음, q=종료, s=저장")
+    print("조작: 오른쪽=다음, 왼쪽=이전, q=종료, s=저장")
 
-    for idx, path in enumerate(img_paths):
-        img = cv2.imread(path)
-        if img is None:
+    from risk import DANGER, CAUTION, SAFE, LEVEL_LABEL
+
+    idx = 0
+    cache = {}  # 처리 결과 캐시
+
+    def get_frame(i):
+        if i not in cache:
+            img = cv2.imread(img_paths[i])
+            if img is None:
+                return None, None, None
+            cache[i] = process_image(img, debug=args.debug)
+        return cache[i]
+
+    while 0 <= idx < len(img_paths):
+        canvas, results, vis_score = get_frame(idx)
+        if canvas is None:
+            idx += 1
             continue
 
-        canvas, results, vis_score = process_image(img, debug=args.debug)
-
-        # 통계 출력
-        from risk import DANGER, CAUTION, SAFE, LEVEL_LABEL
         danger_cnt  = sum(1 for r in results if r.level == DANGER)
         caution_cnt = sum(1 for r in results if r.level == CAUTION)
         vis_lbl     = get_visibility_label(vis_score)
-        print(f"[{idx+1:04d}/{len(img_paths)}] {os.path.basename(path)} | "
+        print(f"[{idx+1:04d}/{len(img_paths)}] {os.path.basename(img_paths[idx])} | "
               f"Vis:{vis_score:.2f}({vis_lbl}) | "
               f"DANGER:{danger_cnt} CAUTION:{caution_cnt} SAFE:{len(results)-danger_cnt-caution_cnt}")
 
-        # 자동 저장
         if args.save:
-            out_path = os.path.join(output_dir, os.path.basename(path))
+            out_path = os.path.join(output_dir, os.path.basename(img_paths[idx]))
             cv2.imwrite(out_path, canvas)
 
         cv2.imshow("Forward Danger Detection", canvas)
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(0) & 0xFF
+
         if key == ord("q"):
             break
         elif key == ord("s"):
             out_path = os.path.join(output_dir, f"save_{idx:04d}.png")
             cv2.imwrite(out_path, canvas)
             print(f"  저장: {out_path}")
+        elif key == 83 or key == ord("d"):  # 오른쪽 화살표 또는 d
+            idx = min(idx + 1, len(img_paths) - 1)
+        elif key == 81 or key == ord("a"):  # 왼쪽 화살표 또는 a
+            idx = max(idx - 1, 0)
 
     cv2.destroyAllWindows()
     print("완료")
