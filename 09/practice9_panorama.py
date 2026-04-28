@@ -1,132 +1,95 @@
+import os
 import cv2
 import numpy as np
-import os
 
-IMAGE_PATH = "../../Data/scenetext01.jpg"
+IMAGE_PATH = "../Data/people.jpg"
+
 OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 전체 이미지를 3개의 overlapping 조각으로 분할 후 파노라마로 재합성
-# ─────────────────────────────────────────────────────────────────────────────
 src = cv2.imread(IMAGE_PATH)
-if src is None:
-    print("Image not found:", IMAGE_PATH)
-    exit(1)
-
 h, w = src.shape[:2]
 
-# 조각 생성: 33% overlap
+# people.jpg를 3개의 overlapping 조각으로 분할
 step = w // 3
-overlap = w // 6
+overlap = w // 5
 imgs = [
-    src[:, 0            : step + overlap],
-    src[:, step - overlap : 2 * step + overlap],
-    src[:, 2 * step - overlap : w],
+    src[:, 0                   : step + overlap],
+    src[:, step - overlap      : 2 * step + overlap],
+    src[:, 2 * step - overlap  : w],
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SIFT + RANSAC Homography 기반 스티칭
-# ─────────────────────────────────────────────────────────────────────────────
+# ── SIFT + RANSAC Homography 기반 스티칭 ──────────────────────────────────────
 def stitch_pair(img_left, img_right):
     sift = cv2.SIFT_create()
-    kp1, des1 = sift.detectAndCompute(cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY), None)
-    kp2, des2 = sift.detectAndCompute(cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY), None)
+    g_l = cv2.cvtColor(img_left,  cv2.COLOR_BGR2GRAY)
+    g_r = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
+    kp1, des1 = sift.detectAndCompute(g_l, None)
+    kp2, des2 = sift.detectAndCompute(g_r, None)
 
     bf = cv2.BFMatcher(cv2.NORM_L2)
     raw = bf.knnMatch(des1, des2, k=2)
-
-    # Lowe's ratio test
     good = [m for m, n in raw if m.distance < 0.75 * n.distance]
+    print(f"  matches={len(good)}", end="")
 
     if len(good) < 4:
-        print("Not enough matches:", len(good))
-        return None
+        return np.hstack([img_left, img_right])
 
     src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-
     H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-    inliers = int(mask.sum())
-    print(f"  Matches: {len(good)}, Inliers: {inliers}")
+    print(f"  inliers={int(mask.sum())}")
 
-    # Warp right image onto left's plane
     hl, wl = img_left.shape[:2]
     hr, wr = img_right.shape[:2]
-    canvas_w = wl + wr
-
-    # Compute offset: translate right image to align
-    # H maps left→right; we need right→left, so use inv(H)
     H_inv = np.linalg.inv(H)
 
-    warped_left = cv2.warpPerspective(img_left, H_inv, (canvas_w, hl))
+    warped_left = cv2.warpPerspective(img_left, H_inv, (wl + wr, hl))
     canvas = warped_left.copy()
-    canvas[:hr, :wr] = img_right  # place right image at origin
+    canvas[:hr, :wr] = img_right
 
-    # Crop black border
-    gray_canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
-    _, mask_crop = cv2.threshold(gray_canvas, 1, 255, cv2.THRESH_BINARY)
-    x_coords = np.where(mask_crop.any(axis=0))[0]
-    y_coords = np.where(mask_crop.any(axis=1))[0]
-    if len(x_coords) and len(y_coords):
-        canvas = canvas[y_coords[0]:y_coords[-1]+1, x_coords[0]:x_coords[-1]+1]
-
+    # 검은 테두리 제거
+    gray_c = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+    _, m = cv2.threshold(gray_c, 1, 255, cv2.THRESH_BINARY)
+    xs = np.where(m.any(axis=0))[0]
+    ys = np.where(m.any(axis=1))[0]
+    if len(xs) and len(ys):
+        canvas = canvas[ys[0]:ys[-1]+1, xs[0]:xs[-1]+1]
     return canvas
 
 
-print("Stitching img[0] + img[1]...")
+print("Stitching piece 0+1 ...")
 mid = stitch_pair(imgs[0], imgs[1])
-if mid is None:
-    mid = np.hstack([imgs[0], imgs[1]])
-
-print("Stitching mid + img[2]...")
+print("Stitching mid+2 ...")
 panorama = stitch_pair(mid, imgs[2])
-if panorama is None:
-    panorama = np.hstack([mid, imgs[2]])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 결과 저장 및 시각화
-# ─────────────────────────────────────────────────────────────────────────────
-# 조각 3개 나란히 표시 (높이 동일하게 resize)
-target_h = 200
-pieces = []
-for i, im in enumerate(imgs):
-    r = target_h / im.shape[0]
-    resized = cv2.resize(im, (int(im.shape[1] * r), target_h))
-    cv2.putText(resized, f"Piece {i+1}", (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 1)
-    pieces.append(resized)
-pieces_row = np.hstack(pieces)
+# ── 결과 시각화 ───────────────────────────────────────────────────────────────
+TH = 160  # 썸네일 높이
 
-# 파노라마 resize
-r_pan = target_h / panorama.shape[0]
-pan_small = cv2.resize(panorama, (int(panorama.shape[1] * r_pan), target_h))
-cv2.putText(pan_small, "Panorama", (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+def thumb(im, caption):
+    r = TH / im.shape[0]
+    t = cv2.resize(im, (int(im.shape[1] * r), TH))
+    cv2.putText(t, caption, (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+    return t
 
-# 원본 resize
-r_src = target_h / src.shape[0]
-src_small = cv2.resize(src, (int(src.shape[1] * r_src), target_h))
-cv2.putText(src_small, "Original", (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+pieces_row = np.hstack([thumb(im, f"Piece {i+1}") for i, im in enumerate(imgs)])
+src_thumb  = thumb(src,      "Original (people.jpg)")
+pan_thumb  = thumb(panorama, "Panorama (SIFT+RANSAC)")
 
-# pad to same width for vstack
-def pad_w(im, target_w):
-    if im.shape[1] < target_w:
-        pad = np.zeros((im.shape[0], target_w - im.shape[1], 3), dtype=np.uint8)
+def pad_w(im, tw):
+    if im.shape[1] < tw:
+        pad = np.zeros((im.shape[0], tw - im.shape[1], 3), np.uint8)
         return np.hstack([im, pad])
-    return im[:, :target_w]
+    return im[:, :tw]
 
-max_w = max(pieces_row.shape[1], pan_small.shape[1], src_small.shape[1])
-combined = np.vstack([
-    pad_w(src_small, max_w),
-    pad_w(pieces_row, max_w),
-    pad_w(pan_small, max_w),
-])
+mw = max(pieces_row.shape[1], pan_thumb.shape[1], src_thumb.shape[1])
+combined = np.vstack([pad_w(src_thumb, mw), pad_w(pieces_row, mw), pad_w(pan_thumb, mw)])
 
-cv2.imwrite(os.path.join(OUTPUT_DIR, "practice9_panorama.png"), combined)
+cv2.imwrite(os.path.join(OUTPUT_DIR, "practice9_panorama.png"),      combined)
 cv2.imwrite(os.path.join(OUTPUT_DIR, "practice9_panorama_full.png"), panorama)
+print(f"\nOriginal : {w}x{h}")
+print(f"Panorama : {panorama.shape[1]}x{panorama.shape[0]}")
 
-print(f"\nOriginal size: {src.shape[1]}x{src.shape[0]}")
-print(f"Panorama size: {panorama.shape[1]}x{panorama.shape[0]}")
-
-cv2.imshow("Panorama Stitching", combined)
+cv2.imshow("Panorama Stitching (people.jpg)", combined)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
