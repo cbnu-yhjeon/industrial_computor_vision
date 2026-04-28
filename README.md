@@ -116,6 +116,27 @@ industrial_computor_vision/
 
 ---
 
+### Lecture 9 - Optical Flow & Panorama Stitching (2026.04.28)
+
+**주요 이론:** Lucas-Kanade Optical Flow, Dense Optical Flow (Farneback), Image Warping, Homography, Panorama Stitching
+
+#### 연습 코드 (`exercises/`)
+
+| 파일 | 내용 |
+|------|------|
+| `warping_affine_perspective.py` | Affine/Perspective/Rotation 변환 비교 |
+| `remapping_arbitrary.py` | Wave 왜곡 / 좌우반전 / Barrel 렌즈 왜곡 (cv2.remap) |
+| `tracking_keypoints_lk.py` | Lucas-Kanade sparse optical flow 키포인트 추적 |
+| `dense_optical_flow.py` | Farneback dense optical flow (HSV 색상 + 화살표 시각화) |
+
+#### 실습 문제
+
+| 파일 | 내용 |
+|------|------|
+| `practice9_panorama.py` | SIFT + RANSAC Homography 기반 파노라마 스티칭 |
+
+---
+
 ## 실행 환경
 
 ```
